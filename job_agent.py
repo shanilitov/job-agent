@@ -106,18 +106,6 @@ SOURCES = [
         "careers_page": "https://agatsoftware.com/careers/",
     },
     {
-        # Plain careers page; each job is an <h1>. The page says all positions are
-        # full-time, in the office in Ein Karem, Jerusalem.
-        "company": "VeracityAds",
-        "type": "html",
-        "page": "https://veracityads.com/careers",
-        "heading_tag": "h1",
-        "ignore_titles": ["Veracity Careers"],
-        "location": "Jerusalem (Ein Karem), per the company's careers page",
-        "commitment": "Full-time, per the company's careers page",
-        "careers_page": "https://veracityads.com/careers",
-    },
-    {
         # Zoho Recruit career site; the job table includes "Date Opened".
         "company": "Squaretalk",
         "type": "zoho",
@@ -568,6 +556,9 @@ def main():
         checked.append(src["company"])
         print(f"SOURCE {src['company']}: {len(jobs)} jobs, "
               f"{sum(1 for j in jobs if in_jerusalem(j))} in Jerusalem")
+        if src["type"] == "html" and not jobs:
+            failed.append(f"{src['company']}: לא נמצאו משרות בדף הקריירה "
+                          "(אולי אין כרגע, ואולי מבנה הדף השתנה)")
         if src["type"] == "html":
             for j in jobs:
                 print(f"  HTML {src['company']}: {j['title']} -> {j['link']}")
