@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 IL = ZoneInfo("Asia/Jerusalem")
-MAX_AGE_HOURS = 72
+MAX_AGE_HOURS = int(os.environ.get("JOB_AGENT_MAX_AGE_HOURS", "72"))  # override only for test runs
 MAX_YEARS_ALLOWED = 3  # exclude if the posting mentions more than this many years
 
 # ---------------------------------------------------------------------------
@@ -110,11 +110,13 @@ INCLUDE_TITLE = re.compile(
 )
 # ...and must not name a level or a domain outside the target.
 EXCLUDE_TITLE = re.compile(
-    r"\b(senior|sr\.?|lead\w*|principal|staff|head|director|vp|manager|architect|"
+    r"\b(lead\w*|principal|staff|head|director|vp|manager|architect|"
     r"intern|student|junior|jr\.?|"
     r"embedded|firmware|hardware|asic|verification|validation|algorithm\w*|c\+\+)",
     re.IGNORECASE,
 )
+# Senior roles are not dropped: they go to their own section of the message.
+SENIOR_TITLE = re.compile(r"\b(senior|sr\.?)(?=\W|$)", re.IGNORECASE)
 YEARS_RE = re.compile(r"(\d+)\s*\+?\s*(?:-\s*\d+\s*)?years?", re.IGNORECASE)
 
 # Staffing agencies are not in SOURCES at all, so they can never appear.
@@ -302,13 +304,19 @@ def is_full_time(job):
 
 
 def level_ok(job):
+    """Keep the job or not; kept jobs get job["senior"] = True/False."""
     if not INCLUDE_TITLE.search(job["title"]) or EXCLUDE_TITLE.search(job["title"]):
         return False
-    if (job.get("level") or "").lower() in EXCLUDE_LEVELS:
+    level = (job.get("level") or "").lower()
+    if level in EXCLUDE_LEVELS - {"senior"}:
         return False
+    if SENIOR_TITLE.search(job["title"]) or level == "senior":
+        job["senior"] = True
+        return True
     years = [int(m.group(1)) for m in YEARS_RE.finditer(job["description"])]
     if years and max(years) > MAX_YEARS_ALLOWED:
         return False
+    job["senior"] = False
     return True
 
 
@@ -375,20 +383,39 @@ def job_lines(j, date_label, date_value):
 def build_message(dated, undated, checked, failed, baselined_now, now):
     date_str = now.astimezone(IL).strftime("%d.%m.%Y %H:%M")
     lines = [f"עדכון משרות, {date_str}", ""]
-    if dated:
-        lines.append(f"נמצאו {len(dated)} משרות שפורסמו ב-72 השעות האחרונות:")
-        for j in dated:
-            lines += job_lines(j, "פורסם", j["created"].astimezone(IL).strftime("%d.%m.%Y"))
+    reg_dated = [j for j in dated if not j["senior"]]
+    reg_undated = [j for j in undated if not j["senior"]]
+    sen_dated = [j for j in dated if j["senior"]]
+    sen_undated = [j for j in undated if j["senior"]]
+
+    def posted(j):
+        return job_lines(j, "פורסם", j["created"].astimezone(IL).strftime("%d.%m.%Y"))
+
+    def first_seen(j):
+        return job_lines(j, "נראתה לראשונה (אין תאריך פרסום במקור)",
+                         j["first_seen"].astimezone(IL).strftime("%d.%m.%Y"))
+
+    if reg_dated:
+        lines.append(f"נמצאו {len(reg_dated)} משרות שפורסמו ב-72 השעות האחרונות:")
+        for j in reg_dated:
+            lines += posted(j)
     else:
         lines.append("לא נמצאו משרות שפורסמו ב-72 השעות האחרונות.")
-    if undated:
+    if reg_undated:
         lines.append("")
         lines.append(
-            f"עוד {len(undated)} משרות חדשות מאז הבדיקה הקודמת. "
+            f"עוד {len(reg_undated)} משרות חדשות מאז הבדיקה הקודמת. "
             "במקור שלהן אין תאריך פרסום, אז התאריך הוא היום שבו הסוכן ראה אותן לראשונה:"
         )
-        for j in undated:
-            lines += job_lines(j, "נראתה לראשונה", j["first_seen"].astimezone(IL).strftime("%d.%m.%Y"))
+        for j in reg_undated:
+            lines += first_seen(j)
+    if sen_dated or sen_undated:
+        lines.append("")
+        lines.append(f"משרות Senior ({len(sen_dated) + len(sen_undated)}), מעל רמת הניסיון שהגדרת:")
+        for j in sen_dated:
+            lines += posted(j)
+        for j in sen_undated:
+            lines += first_seen(j)
     lines.append("")
     lines.append("חברות שנבדקו: " + (", ".join(checked) if checked else "אין"))
     if baselined_now:
