@@ -96,6 +96,28 @@ SOURCES = [
         "careers_page": "https://www.freightos.com/careers/",
     },
     {
+        # Plain careers page, no hiring system and no dates. Each job is a link to
+        # /career/<name>/. The page lists the jobs under "Har Hotzvim, Jerusalem".
+        "company": "AGAT Software",
+        "type": "html",
+        "page": "https://agatsoftware.com/careers/",
+        "link_pattern": r"https://agatsoftware\.com/career/[\w-]+/?",
+        "location": "Jerusalem (Har Hotzvim), per the company's careers page",
+        "careers_page": "https://agatsoftware.com/careers/",
+    },
+    {
+        # Plain careers page; each job is an <h1>. The page says all positions are
+        # full-time, in the office in Ein Karem, Jerusalem.
+        "company": "VeracityAds",
+        "type": "html",
+        "page": "https://veracityads.com/careers",
+        "heading_tag": "h1",
+        "ignore_titles": ["Veracity Careers"],
+        "location": "Jerusalem (Ein Karem), per the company's careers page",
+        "commitment": "Full-time, per the company's careers page",
+        "careers_page": "https://veracityads.com/careers",
+    },
+    {
         # Zoho Recruit career site; the job table includes "Date Opened".
         "company": "Squaretalk",
         "type": "zoho",
@@ -285,7 +307,49 @@ def fetch_phenom(source):
     return jobs
 
 
+def fetch_html(source):
+    """A company's own plain careers page: job titles only, no dates.
+    Location (and type, if given) come from what the page says for all its jobs."""
+    r = requests.get(source["page"], timeout=30, headers={"User-Agent": "Mozilla/5.0 (job-agent)"})
+    r.raise_for_status()
+    found = []  # (title, link)
+    if "link_pattern" in source:
+        for href, inner in re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', r.text, re.S):
+            if re.fullmatch(source["link_pattern"], href):
+                title = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", inner)).split())
+                if title and title.lower() not in ("apply now", "apply"):
+                    found.append((title, href))
+    else:
+        tag = source["heading_tag"]
+        for inner in re.findall(rf"<{tag}[^>]*>(.*?)</{tag}>", r.text, re.S | re.I):
+            title = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", inner)).split())
+            if title and title not in source.get("ignore_titles", []):
+                found.append((title, source["page"]))
+    jobs, seen = [], set()
+    for title, link in found:
+        if (title, link) in seen:
+            continue
+        seen.add((title, link))
+        jobs.append(
+            {
+                "company": source["company"],
+                "title": title,
+                "location": source["location"],
+                "all_locations": [],
+                "commitment": source.get("commitment"),
+                "workplace": "",
+                "created": None,
+                "link": link,
+                # Several jobs can share one page; the title keeps their keys apart.
+                "key": f"{link}#{title}",
+                "description": "",
+            }
+        )
+    return jobs
+
+
 FETCHERS = {
+    "html": fetch_html,
     "lever": fetch_lever,
     "greenhouse": fetch_greenhouse,
     "comeet": fetch_comeet,
@@ -504,11 +568,14 @@ def main():
         checked.append(src["company"])
         print(f"SOURCE {src['company']}: {len(jobs)} jobs, "
               f"{sum(1 for j in jobs if in_jerusalem(j))} in Jerusalem")
+        if src["type"] == "html":
+            for j in jobs:
+                print(f"  HTML {src['company']}: {j['title']} -> {j['link']}")
 
-        if src["type"] == "comeet":
+        if src["type"] in ("comeet", "html"):  # no publish date: track first-seen
             first_run = src["company"] not in state["baselined"]
             for j in jobs:
-                key = j["link"]
+                key = j.get("key") or j["link"]
                 if not key:
                     continue
                 if key not in state["first_seen"]:
@@ -542,8 +609,9 @@ def main():
     def dedupe(items):
         seen, out = set(), []
         for j in items:
-            if j["link"] not in seen:
-                seen.add(j["link"])
+            k = j.get("key") or j["link"]
+            if k not in seen:
+                seen.add(k)
                 out.append(j)
         return out
 
