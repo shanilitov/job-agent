@@ -19,6 +19,7 @@ Environment variables (use GitHub Secrets, never put them in code):
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 """
 import html
+import json
 import os
 import re
 import sys
@@ -58,7 +59,32 @@ SOURCES = [
         "api": "https://boards-api.greenhouse.io/v1/boards/lightricks/jobs?content=true",
         "careers_page": "https://careers.lightricks.com/careers",
     },
+    # Found on the Made in JLM Jerusalem jobs board (ei.fo/board/madeinjlm) and
+    # verified by probe.py on 2026-11-24.
+    {
+        "company": "IDT",
+        "type": "lever",
+        "api": "https://api.lever.co/v0/postings/idt?mode=json",
+        "careers_page": "https://jobs.lever.co/idt",
+    },
+    {
+        "company": "Wellthy",
+        "type": "greenhouse",
+        "api": "https://boards-api.greenhouse.io/v1/boards/wellthy/jobs?content=true",
+        "careers_page": "https://wellthy.com/careers",
+    },
+    {
+        # Comeet gives no publish date (only time_updated), so these jobs are
+        # reported by the date this agent first saw them, in a separate section.
+        "company": "Cross River",
+        "type": "comeet",
+        "page": "https://www.comeet.com/jobs/crossriver/C7.00F",
+        "careers_page": "https://www.comeet.com/jobs/crossriver/C7.00F",
+    },
 ]
+
+# Where first-seen dates are kept between runs (committed back by the workflow).
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen.json")
 
 # The title must name a software-development role in the target stack...
 INCLUDE_TITLE = re.compile(
@@ -135,7 +161,36 @@ def fetch_greenhouse(source):
     return jobs
 
 
-FETCHERS = {"lever": fetch_lever, "greenhouse": fetch_greenhouse}
+def fetch_comeet(source):
+    r = requests.get(source["page"], timeout=30, headers={"User-Agent": "Mozilla/5.0 (job-agent)"})
+    r.raise_for_status()
+    m = re.search(r"COMPANY_POSITIONS_DATA\s*=\s*(\[.*?\]);\s*\n", r.text, re.S)
+    if not m:
+        raise ValueError("positions data not found on the Comeet page")
+    jobs = []
+    for p in json.loads(m.group(1)):
+        loc = p.get("location") or {}
+        jobs.append(
+            {
+                "company": source["company"],
+                "title": (p.get("name") or "").strip(),
+                "location": (loc.get("name") or "").strip(),
+                "all_locations": [loc.get("city") or ""],
+                "commitment": p.get("employment_type"),
+                "workplace": (p.get("workplace_type") or "").strip(),
+                "level": p.get("experience_level"),
+                "created": None,  # Comeet has no publish date
+                "link": p.get("url_comeet_hosted_page") or p.get("url_active_page") or "",
+                "description": "",
+            }
+        )
+    return jobs
+
+
+FETCHERS = {"lever": fetch_lever, "greenhouse": fetch_greenhouse, "comeet": fetch_comeet}
+
+# Experience levels (as the source names them) that are above the target.
+EXCLUDE_LEVELS = {"senior", "management", "executive", "director"}
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +215,8 @@ def is_full_time(job):
 
 def level_ok(job):
     if not INCLUDE_TITLE.search(job["title"]) or EXCLUDE_TITLE.search(job["title"]):
+        return False
+    if (job.get("level") or "").lower() in EXCLUDE_LEVELS:
         return False
     years = [int(m.group(1)) for m in YEARS_RE.finditer(job["description"])]
     if years and max(years) > MAX_YEARS_ALLOWED:
@@ -194,29 +251,63 @@ def link_is_live(url):
 
 
 # ---------------------------------------------------------------------------
+# First-seen state (for sources without a publish date)
+# ---------------------------------------------------------------------------
+def load_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"baselined": [], "first_seen": {}}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=1, sort_keys=True)
+
+
+# ---------------------------------------------------------------------------
 # Message
 # ---------------------------------------------------------------------------
-def build_message(jobs, checked, failed, now):
+def job_lines(j, date_label, date_value):
+    note = years_note(j)
+    return [
+        "",
+        f"{j['title']}",
+        f"חברה: {j['company']}",
+        f"מיקום: {j['location']}",
+        f"סוג משרה: {j['commitment'] or 'לא צוין במקור'}",
+        f"דרך עבודה לפי המקור: {j['workplace'] or 'לא צוין'}",
+        f"{date_label}: {date_value}",
+        f"ניסיון לפי הטקסט במקור: {note if note else 'לא צוין'}",
+        j["link"],
+    ]
+
+
+def build_message(dated, undated, checked, failed, baselined_now, now):
     date_str = now.astimezone(IL).strftime("%d.%m.%Y %H:%M")
     lines = [f"עדכון משרות, {date_str}", ""]
-    if jobs:
-        lines.append(f"נמצאו {len(jobs)} משרות חדשות ב-72 השעות האחרונות:")
-        for j in jobs:
-            created = j["created"].astimezone(IL).strftime("%d.%m.%Y")
-            lines.append("")
-            lines.append(f"{j['title']}")
-            lines.append(f"חברה: {j['company']}")
-            lines.append(f"מיקום: {j['location']}")
-            lines.append(f"סוג משרה: {j['commitment'] or 'לא צוין במקור'}")
-            lines.append(f"דרך עבודה לפי המקור: {j['workplace'] or 'לא צוין'}")
-            lines.append(f"פורסם: {created}")
-            note = years_note(j)
-            lines.append(f"ניסיון לפי הטקסט במקור: {note if note else 'לא צוין'}")
-            lines.append(j["link"])
+    if dated:
+        lines.append(f"נמצאו {len(dated)} משרות שפורסמו ב-72 השעות האחרונות:")
+        for j in dated:
+            lines += job_lines(j, "פורסם", j["created"].astimezone(IL).strftime("%d.%m.%Y"))
     else:
-        lines.append("לא נמצאו משרות חדשות ב-72 השעות האחרונות.")
+        lines.append("לא נמצאו משרות שפורסמו ב-72 השעות האחרונות.")
+    if undated:
+        lines.append("")
+        lines.append(
+            f"עוד {len(undated)} משרות חדשות מאז הבדיקה הקודמת. "
+            "במקור שלהן אין תאריך פרסום, אז התאריך הוא היום שבו הסוכן ראה אותן לראשונה:"
+        )
+        for j in undated:
+            lines += job_lines(j, "נראתה לראשונה", j["first_seen"].astimezone(IL).strftime("%d.%m.%Y"))
     lines.append("")
     lines.append("חברות שנבדקו: " + (", ".join(checked) if checked else "אין"))
+    if baselined_now:
+        lines.append(
+            "התחלתי לעקוב היום אחרי: " + ", ".join(baselined_now)
+            + ". המשרות שכבר פתוחות שם לא נחשבות חדשות; משרות שייפתחו מעכשיו ידווחו."
+        )
     if failed:
         lines.append("לא ניתן היה לבדוק: " + ", ".join(failed))
     return "\n".join(lines)
@@ -254,6 +345,10 @@ def send_telegram(text, dry=False):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+def passes_filters(j):
+    return in_jerusalem(j) and is_full_time(j) and level_ok(j) and not_staffing(j)
+
+
 def main():
     args = set(sys.argv[1:])
     dry = "--dry" in args
@@ -268,7 +363,8 @@ def main():
         print("Not 19:xx Israel time, skipping.")
         return
 
-    found, checked, failed = [], [], []
+    state = load_state()
+    dated, undated, checked, failed, baselined_now = [], [], [], [], []
     for src in SOURCES:
         try:
             jobs = FETCHERS[src["type"]](src)
@@ -277,29 +373,54 @@ def main():
             failed.append(src["company"])
             continue
         checked.append(src["company"])
+
+        if src["type"] == "comeet":
+            first_run = src["company"] not in state["baselined"]
+            for j in jobs:
+                key = j["link"]
+                if not key:
+                    continue
+                if key not in state["first_seen"]:
+                    # On the first run for a company, every open job is recorded with
+                    # the marker "baseline" so it is never reported as new.
+                    state["first_seen"][key] = "baseline" if first_run else now.isoformat()
+                seen = state["first_seen"][key]
+                if seen == "baseline":
+                    continue
+                j["first_seen"] = dt.datetime.fromisoformat(seen)
+                if now - j["first_seen"] > dt.timedelta(hours=MAX_AGE_HOURS):
+                    continue
+                if passes_filters(j):
+                    if link_is_live(j["link"]):
+                        undated.append(j)
+                    else:
+                        failed.append(f"{src['company']}: הקישור למשרה '{j['title']}' לא נטען")
+            if first_run:
+                state["baselined"].append(src["company"])
+                baselined_now.append(src["company"])
+            continue
+
         for j in jobs:
-            if not (
-                is_recent(j, now)
-                and in_jerusalem(j)
-                and is_full_time(j)
-                and level_ok(j)
-                and not_staffing(j)
-            ):
+            if not (is_recent(j, now) and passes_filters(j)):
                 continue
             if not link_is_live(j["link"]):
                 failed.append(f"{src['company']}: הקישור למשרה '{j['title']}' לא נטען")
                 continue
-            found.append(j)
+            dated.append(j)
 
-    # Remove duplicates by link
-    seen, unique = set(), []
-    for j in found:
-        if j["link"] not in seen:
-            seen.add(j["link"])
-            unique.append(j)
+    def dedupe(items):
+        seen, out = set(), []
+        for j in items:
+            if j["link"] not in seen:
+                seen.add(j["link"])
+                out.append(j)
+        return out
 
-    unique.sort(key=lambda j: j["created"], reverse=True)
-    send_telegram(build_message(unique, checked, failed, now), dry)
+    dated = sorted(dedupe(dated), key=lambda j: j["created"], reverse=True)
+    undated = sorted(dedupe(undated), key=lambda j: j["first_seen"], reverse=True)
+    send_telegram(build_message(dated, undated, checked, failed, baselined_now, now), dry)
+    if not dry:
+        save_state(state)
 
 
 if __name__ == "__main__":
