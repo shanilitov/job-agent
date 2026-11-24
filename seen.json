@@ -1,8 +1,12 @@
 {
  "baselined": [
-  "Cross River"
+  "Cross River",
+  "Fullpath",
+  "Freightos",
+  "AGAT Software"
  ],
  "first_seen": {
+  "https://agatsoftware.com/career/250-technical-product-manager-ai-security/#250 – Technical Product Manager – AI Security": "baseline",
   "https://www.comeet.com/jobs/crossriver/C7.00F/ai-security-engineer/53.E6A": "baseline",
   "https://www.comeet.com/jobs/crossriver/C7.00F/data-reporting-lead/2D.47E": "baseline",
   "https://www.comeet.com/jobs/crossriver/C7.00F/engineering-manager/78.D53": "baseline",
@@ -21,6 +25,38 @@
   "https://www.comeet.com/jobs/crossriver/C7.00F/senior-software-engineer---iam/A6.B46": "baseline",
   "https://www.comeet.com/jobs/crossriver/C7.00F/software-development-team-lead---identity--access-management-iam/59.47D": "baseline",
   "https://www.comeet.com/jobs/crossriver/C7.00F/staff-software-engineer/4E.17F": "baseline",
-  "https://www.comeet.com/jobs/crossriver/C7.00F/would-love-to-join-cross-river/92.F23": "baseline"
+  "https://www.comeet.com/jobs/crossriver/C7.00F/would-love-to-join-cross-river/92.F23": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/business-development-executive--pool/6D.077": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/ciso/6B.F61": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/ciso/6B.F63": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/digital-marketing-intern/E1.E6D": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/finops-profiles-pool/32.759": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/import-analyst--pool-custom-broker/B1.26A": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/marketing-operations-specialist/79.47B": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/multi-lingual-profiles-pool-german-dutch-french-nordics-and-more/BC.650": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/qa-automation-engineer-pool/AC.65F": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/sales-talent-pool-enterprise-sales-executive-sales-executive-enterprise-account-manager/AC.65E": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/senior-sales-manager--japan-remote/D7.478": "baseline",
+  "https://www.comeet.com/jobs/freightos/F0.000/software-engineers-pool/32.75C": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/customer-success-manager-enterprise/EF.566": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/customer-success-manager/5E.B69": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/devsecops-engineer/F3.578": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/director-retail-sales-east/8A.63B": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/director-retail-sales-west/89.479": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/fullstack-engineer---cdp/6C.478": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/hands-on-backend-team-lead-jerusalem/E3.578": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/hands-on-backend-team-lead-tel-aviv/D4.277": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/head-of-product---crm/E8.663": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/head-of-product---crm/E8.663-41.10D": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/product-manager-activation/52.27E": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/regional-sales-manager-mn-wi/DD.478": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/regional-sales-manager-mn-wi/DD.478-20.60C": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/regional-sales-manager-mo-tn-ar/FD.472": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/regional-sales-manager-va-md-dc-de/89.476": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/senior-backend-engineer/97.069": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/senior-backend-engineer/97.069-D7.209": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/senior-product-manager---cdp/BD.17B": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/technical-support-engineer/57.57D": "baseline",
+  "https://www.comeet.com/jobs/fullpath/54.002/technical-support-engineer/57.57D-41.10D": "baseline"
  }
 }
