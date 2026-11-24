@@ -82,6 +82,20 @@ SOURCES = [
         "careers_page": "https://www.comeet.com/jobs/crossriver/C7.00F",
     },
     {
+        # fullpath.com/careers is built on Comeet (company uid 54.002, seen in the page).
+        "company": "Fullpath",
+        "type": "comeet",
+        "page": "https://www.comeet.com/jobs/fullpath/54.002",
+        "careers_page": "https://www.fullpath.com/careers",
+    },
+    {
+        # freightos.com/careers is built on Comeet (company uid F0.000, seen in the page).
+        "company": "Freightos",
+        "type": "comeet",
+        "page": "https://www.comeet.com/jobs/freightos/F0.000",
+        "careers_page": "https://www.freightos.com/careers/",
+    },
+    {
         # Zoho Recruit career site; the job table includes "Date Opened".
         "company": "Squaretalk",
         "type": "zoho",
