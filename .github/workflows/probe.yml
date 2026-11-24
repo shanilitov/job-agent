@@ -12,6 +12,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - run: python probe.py
       - run: python job_agent.py --force --dry
         env:
           JOB_AGENT_MAX_AGE_HOURS: "336"  # 14 days, test runs only
