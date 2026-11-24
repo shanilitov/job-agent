@@ -320,7 +320,8 @@ def fetch_phenom(source):
                 "workplace": (p.get("remote") or "") if isinstance(p.get("remote"), str) else "",
                 "created": dt.datetime.strptime(posted[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc),
                 "link": f"{source['base']}/job/{p.get('jobId') or p.get('reqId')}/",
-                "description": p.get("descriptionTeaser") or "",
+                # Left empty on purpose: the full text is read from the job page itself.
+                "description": "",
             }
         )
     return jobs

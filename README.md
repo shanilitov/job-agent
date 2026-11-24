@@ -95,41 +95,38 @@ You can change all of these at the top of `job_agent.py` (`INCLUDE_TITLE`, `EXCL
 
 ## The daily message
 
+Messages are sent with Telegram HTML formatting. Each job title links to the job page.
+
 ```
-עדכון משרות, 24.11.2026 19:30
+עדכון משרות · 24.11.2026 19:30
 
-נמצאו 1 משרות שפורסמו ב-72 השעות האחרונות:
+✅ 1 משרות חדשות ב-72 השעות האחרונות:
 
-Full Stack Engineer
-חברה: Example Co
-מיקום: Jerusalem, Israel
-סוג משרה: Full time
-דרך עבודה לפי המקור: hybrid
-פורסם: 24.11.2026
-ניסיון לפי הטקסט במקור: 2+ years of experience in React
-https://...
+Full Stack Engineer            ← links to the job
+🏢 Example Co
+📍 Jerusalem, Israel
+💼 Full-time · Hybrid
+📅 פורסם: 24.11.2026
+🎓 מתוך המודעה: 2+ years of experience with React and Node.js
 
-עוד 1 משרות חדשות מאז הבדיקה הקודמת. במקור שלהן אין תאריך פרסום...
-
-משרות Senior (1), מעל רמת הניסיון שהגדרת:
+🆕 משרות שנפתחו מאז הבדיקה הקודמת
+(באתר שלהן אין תאריך פרסום, אז מוצג היום שבו הסוכן ראה אותן לראשונה)
 ...
 
-חברות שנבדקו: Mobileye, Triple Whale, ...
-לא ניתן היה לבדוק: ...
+⭐ משרות Senior (1) · מעל רמת הניסיון שהגדרת
+...
+
+—
+נבדקו 14 חברות: Mobileye, Triple Whale, ...
+⚠️ לא ניתן היה לבדוק: ...
 ```
 
 (The job above is an illustration of the format, not real data.)
 
-The message has these sections:
-
-1. Jobs published in the last 72 hours.
-2. Jobs that are new since the previous check, from sources without a publish date.
-3. Senior roles, from either kind of source.
-4. The companies that were checked, and any that could not be checked.
-
-On days with no matching jobs the message still arrives and says so, which shows that the agent ran.
-
-The "experience" line is a direct quote from the posting, never a summary.
+- A line is shown only when the source gives that field. Unknown fields are left out rather than shown as "not stated".
+- When the job list lacks a description or employment type, those are read from the job's own page. The page's JSON-LD `JobPosting` is used when it has one.
+- The 🎓 line quotes the full sentence from the posting that states the required years of experience. It is never a summary.
+- On days with no matching jobs the message still arrives and says so, which shows that the agent ran.
 
 ## First-seen tracking
 
@@ -175,11 +172,14 @@ python job_agent.py --force --dry
 # Look further back than 72 hours, for testing
 JOB_AGENT_MAX_AGE_HOURS=336 python job_agent.py --force --dry
 
+# Send a real message looking back 14 days, without touching seen.json
+TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... JOB_AGENT_MAX_AGE_HOURS=336 python job_agent.py --force --no-save
+
 # Send a simple test message to Telegram
 TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... python job_agent.py --test
 ```
 
-`.github/workflows/probe.yml` runs the dry version on GitHub with a 14-day window. Use it to check changes without sending anything.
+On GitHub, **Probe career boards** prints a 14-day dry run without sending anything. **Test message (14 days)** sends a real, clearly labelled message looking back 14 days and does not change `seen.json`.
 
 ## Adding a company
 
@@ -210,6 +210,7 @@ Supported types: `greenhouse`, `lever`, `workday`, `phenom`, `zoho`, `elbit`, `c
 ├── requirements.txt
 └── .github/workflows/
     ├── daily.yml             # scheduled run: sends the message and saves state
+    ├── test-message.yml      # manual: real message, 14-day window, state untouched
     └── probe.yml             # manual dry run with a 14-day window; sends nothing
 ```
 
