@@ -52,10 +52,17 @@ SOURCES = [
     },
 ]
 
-# Words in the title that indicate a level outside the target range.
+# The title must name a software-development role in the target stack...
+INCLUDE_TITLE = re.compile(
+    r"(full[\s-]?stack|front[\s-]?end|back[\s-]?end|software|developer|web|"
+    r"\.net|c#|angular|react|node|python|java\b|typescript)",
+    re.IGNORECASE,
+)
+# ...and must not name a level or a domain outside the target.
 EXCLUDE_TITLE = re.compile(
-    r"\b(senior|sr\.?|lead|principal|staff|head|director|vp|manager|architect|"
-    r"intern|student|junior|jr\.?)\b",
+    r"\b(senior|sr\.?|lead\w*|principal|staff|head|director|vp|manager|architect|"
+    r"intern|student|junior|jr\.?|"
+    r"embedded|firmware|hardware|asic|verification|validation|algorithm\w*|c\+\+)",
     re.IGNORECASE,
 )
 YEARS_RE = re.compile(r"(\d+)\s*\+?\s*(?:-\s*\d+\s*)?years?", re.IGNORECASE)
@@ -144,7 +151,7 @@ def is_full_time(job):
 
 
 def level_ok(job):
-    if EXCLUDE_TITLE.search(job["title"]):
+    if not INCLUDE_TITLE.search(job["title"]) or EXCLUDE_TITLE.search(job["title"]):
         return False
     years = [int(m.group(1)) for m in YEARS_RE.finditer(job["description"])]
     if years and max(years) > MAX_YEARS_ALLOWED:
