@@ -13,4 +13,3 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: python probe.py
-      - run: python job_agent.py --force --dry
