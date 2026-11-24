@@ -173,6 +173,14 @@ YEARS_RE = re.compile(r"(\d+)\s*\+?\s*(?:-\s*\d+\s*)?years?", re.IGNORECASE)
 STAFFING_BLACKLIST = ["top-soft", "tops-soft", "manpower", "matrix", "ness"]
 
 
+def html_to_text(raw):
+    """HTML (possibly escaped twice) to plain text, one line per paragraph/bullet."""
+    t = html.unescape(html.unescape(raw or ""))
+    t = html.unescape(re.sub(r"<[^>]+>", "\n", t))
+    lines = (" ".join(x.split()) for x in t.split("\n"))
+    return "\n".join(x for x in lines if x)
+
+
 # ---------------------------------------------------------------------------
 # Fetching
 # ---------------------------------------------------------------------------
@@ -209,8 +217,6 @@ def fetch_greenhouse(source):
         published = p.get("first_published")
         if not published:
             continue  # no publish date -> never included
-        text = html.unescape(p.get("content") or "")
-        text = html.unescape(re.sub(r"<[^>]+>", " ", text))
         jobs.append(
             {
                 "company": source["company"],
@@ -222,7 +228,7 @@ def fetch_greenhouse(source):
                 "workplace": "",
                 "created": dt.datetime.fromisoformat(published).astimezone(dt.timezone.utc),
                 "link": p.get("absolute_url", ""),
-                "description": " ".join(text.split()),
+                "description": html_to_text(p.get("content")),
             }
         )
     return jobs
@@ -418,7 +424,6 @@ def fetch_workday(source):
         start = info.get("startDate")
         if not start:
             continue  # no publish date -> never included
-        text = html.unescape(re.sub(r"<[^>]+>", " ", info.get("jobDescription") or ""))
         jobs.append(
             {
                 "company": source["company"],
@@ -430,7 +435,7 @@ def fetch_workday(source):
                 "created": dt.datetime.strptime(start[:10], "%Y-%m-%d").replace(tzinfo=IL)
                 .astimezone(dt.timezone.utc),
                 "link": info.get("externalUrl") or f"https://{host}/{site}{p['externalPath']}",
-                "description": " ".join(text.split()),
+                "description": html_to_text(info.get("jobDescription")),
             }
         )
     return jobs
@@ -447,7 +452,6 @@ def fetch_elbit(source):
         opened = p.get("openDate")
         if not opened:
             continue  # no publish date -> never included
-        text = html.unescape(html.unescape(re.sub(r"&lt;[^&]*&gt;|<[^>]+>", " ", p.get("description") or "")))
         jobs.append(
             {
                 "company": source["company"],
@@ -459,7 +463,7 @@ def fetch_elbit(source):
                 "created": dt.datetime.strptime(opened[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=IL)
                 .astimezone(dt.timezone.utc),
                 "link": f"https://elbitsystemscareer.com/job/?jid={p.get('jobId')}",
-                "description": " ".join(re.sub(r"<[^>]+>", " ", text).split()),
+                "description": html_to_text(p.get("description")),
             }
         )
     return jobs
@@ -518,13 +522,20 @@ def level_ok(job):
 
 
 def years_note(job):
-    """Return text copied from the posting about years of experience, or None."""
-    m = YEARS_RE.search(job["description"])
+    """Return the sentence from the posting that states the years of experience, or None."""
+    text = job.get("description") or ""
+    m = YEARS_RE.search(text)
     if not m:
         return None
-    start = max(0, m.start() - 40)
-    end = min(len(job["description"]), m.end() + 40)
-    return " ".join(job["description"][start:end].split())
+    # Sentence / bullet boundaries around the match.
+    left = max(text.rfind(c, 0, m.start()) for c in ".•;\n")
+    right_candidates = [i for i in (text.find(c, m.end()) for c in ".•;\n") if i != -1]
+    right = min(right_candidates) if right_candidates else len(text)
+    sentence = " ".join(text[left + 1:right].split()).strip(" -–:")
+    if len(sentence) > 160:  # very long sentence: keep a window around the match
+        start = max(0, m.start() - left - 1 - 60)
+        sentence = "…" + sentence[start:start + 150].strip() + "…"
+    return sentence
 
 
 def not_staffing(job):
@@ -532,15 +543,52 @@ def not_staffing(job):
     return not any(b in name for b in STAFFING_BLACKLIST)
 
 
-def link_is_live(url):
-    """A job counts as open only if its page loads in this run."""
+def _visible_text(page):
+    page = re.sub(r"(?is)<(script|style|noscript|svg|header|footer|nav)[^>]*>.*?</\1>", " ", page)
+    return html_to_text(page)
+
+
+def open_job_page(job):
+    """A job counts as open only if its own page loads in this run (HTTP 200).
+    The page also fills in details the job list did not have (description,
+    employment type), always copied from the page itself."""
+    url = job.get("link")
     if not url:
         return False
     try:
-        r = requests.get(url, timeout=30, allow_redirects=True)
-        return r.status_code == 200
+        r = requests.get(url, timeout=30, allow_redirects=True,
+                         headers={"User-Agent": "Mozilla/5.0 (job-agent)"})
     except requests.RequestException:
         return False
+    if r.status_code != 200:
+        return False
+    posting = None
+    for block in re.findall(r'(?is)<script[^>]+application/ld\+json[^>]*>(.*?)</script>', r.text):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        for d in data if isinstance(data, list) else [data]:
+            if isinstance(d, dict) and d.get("@type") == "JobPosting":
+                posting = d
+    if not job.get("description"):
+        if posting and posting.get("description"):
+            job["description"] = html_to_text(posting["description"])
+        else:
+            job["description"] = _visible_text(r.text)
+    if not job.get("commitment") and posting and posting.get("employmentType"):
+        et = posting["employmentType"]
+        et = et[0] if isinstance(et, list) and et else et
+        job["commitment"] = {"FULL_TIME": "Full-time", "PART_TIME": "Part-time"}.get(et, et)
+    return True
+
+
+def years_ok_after_details(job):
+    """The years rule runs again once the job page filled in the description."""
+    if job.get("senior"):
+        return True
+    years = [int(m.group(1)) for m in YEARS_RE.finditer(job.get("description") or "")]
+    return not (years and max(years) > MAX_YEARS_ALLOWED)
 
 
 # ---------------------------------------------------------------------------
@@ -562,26 +610,37 @@ def save_state(state):
 # ---------------------------------------------------------------------------
 # Message
 # ---------------------------------------------------------------------------
+def esc(t):
+    return html.escape(str(t), quote=False)
+
+
+def window_text():
+    if MAX_AGE_HOURS % 24 == 0 and MAX_AGE_HOURS > 72:
+        return f"ב-{MAX_AGE_HOURS // 24} הימים האחרונים"
+    return f"ב-{MAX_AGE_HOURS} השעות האחרונות"
+
+
 def job_lines(j, date_label, date_value):
+    """One job. Only fields the source actually gives are shown."""
+    out = ["", f'<b><a href="{html.escape(j["link"])}">{esc(j["title"])}</a></b>']
+    out.append(f"🏢 {esc(j['company'])}")
+    if j.get("location"):
+        out.append(f"📍 {esc(j['location'])}")
+    details = [x for x in (j.get("commitment"), j.get("workplace")) if x]
+    if details:
+        out.append("💼 " + " · ".join(esc(x) for x in details))
+    out.append(f"📅 {date_label}: {date_value}")
     note = years_note(j)
-    return [
-        "",
-        f"{j['title']}",
-        f"חברה: {j['company']}",
-        f"מיקום: {j['location']}",
-        f"סוג משרה: {j['commitment'] or 'לא צוין במקור'}",
-        f"דרך עבודה לפי המקור: {j['workplace'] or 'לא צוין'}",
-        f"{date_label}: {date_value}",
-        f"ניסיון לפי הטקסט במקור: {note if note else 'לא צוין'}",
-        j["link"],
-    ]
+    if note:
+        out.append(f"🎓 מתוך המודעה: <i>{esc(note)}</i>")
+    return out
 
 
 def build_message(dated, undated, checked, failed, baselined_now, now):
     date_str = now.astimezone(IL).strftime("%d.%m.%Y %H:%M")
-    lines = [f"עדכון משרות, {date_str}", ""]
+    lines = [f"<b>עדכון משרות</b> · {date_str}"]
     if os.environ.get("JOB_AGENT_TEST_LABEL"):
-        lines = [os.environ["JOB_AGENT_TEST_LABEL"], ""] + lines
+        lines = [f"<b>{esc(os.environ['JOB_AGENT_TEST_LABEL'])}</b>", ""] + lines
     reg_dated = [j for j in dated if not j["senior"]]
     reg_undated = [j for j in undated if not j["senior"]]
     sen_dated = [j for j in dated if j["senior"]]
@@ -591,39 +650,38 @@ def build_message(dated, undated, checked, failed, baselined_now, now):
         return job_lines(j, "פורסם", j["created"].astimezone(IL).strftime("%d.%m.%Y"))
 
     def first_seen(j):
-        return job_lines(j, "נראתה לראשונה (אין תאריך פרסום במקור)",
-                         j["first_seen"].astimezone(IL).strftime("%d.%m.%Y"))
+        return job_lines(j, "נראתה לראשונה", j["first_seen"].astimezone(IL).strftime("%d.%m.%Y"))
 
+    lines.append("")
     if reg_dated:
-        lines.append(f"נמצאו {len(reg_dated)} משרות שפורסמו ב-72 השעות האחרונות:")
+        lines.append(f"✅ <b>{len(reg_dated)} משרות חדשות</b> {window_text()}:")
         for j in reg_dated:
             lines += posted(j)
     else:
-        lines.append("לא נמצאו משרות שפורסמו ב-72 השעות האחרונות.")
+        lines.append(f"אין משרות חדשות שמתאימות לך {window_text()}.")
     if reg_undated:
         lines.append("")
-        lines.append(
-            f"עוד {len(reg_undated)} משרות חדשות מאז הבדיקה הקודמת. "
-            "במקור שלהן אין תאריך פרסום, אז התאריך הוא היום שבו הסוכן ראה אותן לראשונה:"
-        )
+        lines.append(f"🆕 <b>{len(reg_undated)} משרות שנפתחו מאז הבדיקה הקודמת</b>")
+        lines.append("<i>(באתר שלהן אין תאריך פרסום, אז מוצג היום שבו הסוכן ראה אותן לראשונה)</i>")
         for j in reg_undated:
             lines += first_seen(j)
     if sen_dated or sen_undated:
         lines.append("")
-        lines.append(f"משרות Senior ({len(sen_dated) + len(sen_undated)}), מעל רמת הניסיון שהגדרת:")
+        lines.append(f"⭐ <b>משרות Senior ({len(sen_dated) + len(sen_undated)})</b> · מעל רמת הניסיון שהגדרת")
         for j in sen_dated:
             lines += posted(j)
         for j in sen_undated:
             lines += first_seen(j)
     lines.append("")
-    lines.append("חברות שנבדקו: " + (", ".join(checked) if checked else "אין"))
+    lines.append("—")
+    lines.append(f"<i>נבדקו {len(checked)} חברות: {esc(', '.join(checked)) if checked else 'אין'}</i>")
     if baselined_now:
         lines.append(
-            "התחלתי לעקוב היום אחרי: " + ", ".join(baselined_now)
-            + ". המשרות שכבר פתוחות שם לא נחשבות חדשות; משרות שייפתחו מעכשיו ידווחו."
+            f"<i>התחלתי לעקוב אחרי {esc(', '.join(baselined_now))}. "
+            "המשרות שכבר פתוחות שם לא ידווחו כחדשות, רק משרות שייפתחו מעכשיו.</i>"
         )
     if failed:
-        lines.append("לא ניתן היה לבדוק: " + ", ".join(failed))
+        lines.append(f"⚠️ לא ניתן היה לבדוק: {esc(', '.join(failed))}")
     return "\n".join(lines)
 
 
@@ -648,7 +706,8 @@ def send_telegram(text, dry=False):
     for part in split_message(text):
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": part, "disable_web_page_preview": True},
+            json={"chat_id": chat_id, "text": part, "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
             timeout=30,
         )
         if not r.ok:
@@ -713,10 +772,10 @@ def main():
                 if now - j["first_seen"] > dt.timedelta(hours=MAX_AGE_HOURS):
                     continue
                 if passes_filters(j):
-                    if link_is_live(j["link"]):
-                        undated.append(j)
-                    else:
+                    if not open_job_page(j):
                         failed.append(f"{src['company']}: הקישור למשרה '{j['title']}' לא נטען")
+                    elif is_full_time(j) and years_ok_after_details(j):
+                        undated.append(j)
             if first_run:
                 state["baselined"].append(src["company"])
                 baselined_now.append(src["company"])
@@ -725,10 +784,11 @@ def main():
         for j in jobs:
             if not (is_recent(j, now) and passes_filters(j)):
                 continue
-            if not link_is_live(j["link"]):
+            if not open_job_page(j):
                 failed.append(f"{src['company']}: הקישור למשרה '{j['title']}' לא נטען")
                 continue
-            dated.append(j)
+            if is_full_time(j) and years_ok_after_details(j):
+                dated.append(j)
 
     def dedupe(items):
         seen, out = set(), []
