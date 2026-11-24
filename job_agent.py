@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""
+Job agent: checks company career boards for Jerusalem jobs and sends a daily
+Telegram summary.
+
+Rules:
+- Every field in the message (title, company, location, date, link) is copied
+  from the source data. Nothing is generated or guessed.
+- A link is included only if it was fetched successfully (HTTP 200) in this run.
+- If a source fails, the message says so instead of filling in the gap.
+
+Usage:
+  python job_agent.py            # normal run (respects the 19:00 Israel-time gate)
+  python job_agent.py --force    # run now, ignore the time gate
+  python job_agent.py --test     # only send a test message to Telegram
+  python job_agent.py --dry      # run everything but print instead of sending
+
+Environment variables (use GitHub Secrets, never put them in code):
+  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+"""
+import os
+import re
+import sys
+import datetime as dt
+from zoneinfo import ZoneInfo
+
+import requests
+
+IL = ZoneInfo("Asia/Jerusalem")
+MAX_AGE_HOURS = 72
+MAX_YEARS_ALLOWED = 3  # exclude if the posting mentions more than this many years
+
+# ---------------------------------------------------------------------------
+# Sources. Add companies here once their career-board system is verified.
+# type "lever": public Lever postings API. Mobileye uses the EU instance.
+# ---------------------------------------------------------------------------
+SOURCES = [
+    {
+        "company": "Mobileye",
+        "type": "lever",
+        "api": "https://api.eu.lever.co/v0/postings/mobileye?mode=json",
+        "careers_page": "https://careers.mobileye.com",
+    },
+]
+
+# Words in the title that indicate a level outside the target range.
+EXCLUDE_TITLE = re.compile(
+    r"\b(senior|sr\.?|lead|principal|staff|head|director|vp|manager|architect|"
+    r"intern|student|junior|jr\.?)\b",
+    re.IGNORECASE,
+)
+YEARS_RE = re.compile(r"(\d+)\s*\+?\s*(?:-\s*\d+\s*)?years?", re.IGNORECASE)
+
+# Staffing agencies are not in SOURCES at all, so they can never appear.
+# This list is an extra safety net on the employer name returned by a source.
+STAFFING_BLACKLIST = ["top-soft", "tops-soft", "manpower", "matrix", "ness"]
+
+
+# ---------------------------------------------------------------------------
+# Fetching
+# ---------------------------------------------------------------------------
+def fetch_lever(source):
+    r = requests.get(source["api"], timeout=30)
+    r.raise_for_status()
+    jobs = []
+    for p in r.json():
+        cats = p.get("categories") or {}
+        created_ms = p.get("createdAt")
+        if not created_ms:
+            continue  # no publish date -> never included
+        jobs.append(
+            {
+                "company": source["company"],
+                "title": p.get("text", "").strip(),
+                "location": (cats.get("location") or "").strip(),
+                "all_locations": [x for x in (cats.get("allLocations") or [])],
+                "commitment": (cats.get("commitment") or "").strip(),
+                "workplace": (p.get("workplaceType") or "").strip(),
+                "created": dt.datetime.fromtimestamp(created_ms / 1000, tz=dt.timezone.utc),
+                "link": p.get("hostedUrl", ""),
+                "description": p.get("descriptionPlain", "") or "",
+            }
+        )
+    return jobs
+
+
+FETCHERS = {"lever": fetch_lever}
+
+
+# ---------------------------------------------------------------------------
+# Filters
+# ---------------------------------------------------------------------------
+def is_recent(job, now):
+    return (now - job["created"]) <= dt.timedelta(hours=MAX_AGE_HOURS)
+
+
+def in_jerusalem(job):
+    places = [job["location"]] + job["all_locations"]
+    return any("jerusalem" in p.lower() for p in places)
+
+
+def is_full_time(job):
+    return "full" in job["commitment"].lower()
+
+
+def level_ok(job):
+    if EXCLUDE_TITLE.search(job["title"]):
+        return False
+    years = [int(m.group(1)) for m in YEARS_RE.finditer(job["description"])]
+    if years and max(years) > MAX_YEARS_ALLOWED:
+        return False
+    return True
+
+
+def years_note(job):
+    """Return text copied from the posting about years of experience, or None."""
+    m = YEARS_RE.search(job["description"])
+    if not m:
+        return None
+    start = max(0, m.start() - 40)
+    end = min(len(job["description"]), m.end() + 40)
+    return " ".join(job["description"][start:end].split())
+
+
+def not_staffing(job):
+    name = job["company"].lower()
+    return not any(b in name for b in STAFFING_BLACKLIST)
+
+
+def link_is_live(url):
+    """A job counts as open only if its page loads in this run."""
+    if not url:
+        return False
+    try:
+        r = requests.get(url, timeout=30, allow_redirects=True)
+        return r.status_code == 200
+    except requests.RequestException:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Message
+# ---------------------------------------------------------------------------
+def build_message(jobs, checked, failed, now):
+    date_str = now.astimezone(IL).strftime("%d.%m.%Y %H:%M")
+    lines = [f"עדכון משרות, {date_str}", ""]
+    if jobs:
+        lines.append(f"נמצאו {len(jobs)} משרות חדשות ב-72 השעות האחרונות:")
+        for j in jobs:
+            created = j["created"].astimezone(IL).strftime("%d.%m.%Y")
+            lines.append("")
+            lines.append(f"{j['title']}")
+            lines.append(f"חברה: {j['company']}")
+            lines.append(f"מיקום: {j['location']}")
+            lines.append(f"סוג משרה: {j['commitment']}")
+            lines.append(f"דרך עבודה לפי המקור: {j['workplace'] or 'לא צוין'}")
+            lines.append(f"פורסם: {created}")
+            note = years_note(j)
+            lines.append(f"ניסיון לפי הטקסט במקור: {note if note else 'לא צוין'}")
+            lines.append(j["link"])
+    else:
+        lines.append("לא נמצאו משרות חדשות ב-72 השעות האחרונות.")
+    lines.append("")
+    lines.append("חברות שנבדקו: " + (", ".join(checked) if checked else "אין"))
+    if failed:
+        lines.append("לא ניתן היה לבדוק: " + ", ".join(failed))
+    return "\n".join(lines)
+
+
+def split_message(text, limit=4000):
+    parts, cur = [], ""
+    for block in text.split("\n\n"):
+        if len(cur) + len(block) + 2 > limit and cur:
+            parts.append(cur)
+            cur = ""
+        cur += ("\n\n" if cur else "") + block
+    if cur:
+        parts.append(cur)
+    return parts
+
+
+def send_telegram(text, dry=False):
+    if dry:
+        print(text)
+        return
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+    for part in split_message(text):
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": part, "disable_web_page_preview": True},
+            timeout=30,
+        )
+        if not r.ok:
+            print(f"Telegram error: {r.status_code} {r.text}", file=sys.stderr)
+            sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main():
+    args = set(sys.argv[1:])
+    dry = "--dry" in args
+
+    if "--test" in args:
+        send_telegram("הודעת בדיקה מסוכן המשרות. החיבור לטלגרם עובד.", dry)
+        return
+
+    now = dt.datetime.now(dt.timezone.utc)
+    manual = "--force" in args or os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    if not manual and now.astimezone(IL).hour != 19:
+        print("Not 19:xx Israel time, skipping.")
+        return
+
+    found, checked, failed = [], [], []
+    for src in SOURCES:
+        try:
+            jobs = FETCHERS[src["type"]](src)
+        except Exception as e:  # noqa: BLE001
+            print(f"{src['company']} failed: {e}", file=sys.stderr)
+            failed.append(src["company"])
+            continue
+        checked.append(src["company"])
+        for j in jobs:
+            if not (
+                is_recent(j, now)
+                and in_jerusalem(j)
+                and is_full_time(j)
+                and level_ok(j)
+                and not_staffing(j)
+            ):
+                continue
+            if not link_is_live(j["link"]):
+                failed.append(f"{src['company']}: הקישור למשרה '{j['title']}' לא נטען")
+                continue
+            found.append(j)
+
+    # Remove duplicates by link
+    seen, unique = set(), []
+    for j in found:
+        if j["link"] not in seen:
+            seen.add(j["link"])
+            unique.append(j)
+
+    unique.sort(key=lambda j: j["created"], reverse=True)
+    send_telegram(build_message(unique, checked, failed, now), dry)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,23 @@
+name: Daily job update
+
+on:
+  schedule:
+    # Two UTC times so that 19:xx Israel time is covered in both summer and winter.
+    # The script itself only proceeds when it is 19:xx in Israel.
+    - cron: "30 16 * * *"
+    - cron: "30 17 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python job_agent.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
