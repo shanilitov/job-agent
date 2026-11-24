@@ -50,6 +50,14 @@ SOURCES = [
         "api": "https://boards-api.greenhouse.io/v1/boards/triplewhale/jobs?content=true",
         "careers_page": "https://job-boards.greenhouse.io/triplewhale",
     },
+    {
+        # careers.lightricks.com loads its jobs from Greenhouse board "lightricks"
+        # (seen in the page's own script). The board had 0 open jobs on 2026-11-24.
+        "company": "Lightricks",
+        "type": "greenhouse",
+        "api": "https://boards-api.greenhouse.io/v1/boards/lightricks/jobs?content=true",
+        "careers_page": "https://careers.lightricks.com/careers",
+    },
 ]
 
 # The title must name a software-development role in the target stack...
