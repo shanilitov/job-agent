@@ -81,6 +81,22 @@ SOURCES = [
         "page": "https://www.comeet.com/jobs/crossriver/C7.00F",
         "careers_page": "https://www.comeet.com/jobs/crossriver/C7.00F",
     },
+    {
+        # Zoho Recruit career site; the job table includes "Date Opened".
+        "company": "Squaretalk",
+        "type": "zoho",
+        "page": "https://careers.squaretalk.com/careers",
+        "careers_page": "https://careers.squaretalk.com/careers",
+    },
+    {
+        # Phenom career site (owner of Ex Libris). Its own search endpoint returns
+        # postedDate for each job.
+        "company": "Clarivate",
+        "type": "phenom",
+        "base": "https://careers.clarivate.com",
+        "ref_num": "CLACLAGB",
+        "careers_page": "https://careers.clarivate.com",
+    },
 ]
 
 # Where first-seen dates are kept between runs (committed back by the workflow).
@@ -187,7 +203,79 @@ def fetch_comeet(source):
     return jobs
 
 
-FETCHERS = {"lever": fetch_lever, "greenhouse": fetch_greenhouse, "comeet": fetch_comeet}
+def fetch_zoho(source):
+    r = requests.get(source["page"], timeout=30, headers={"User-Agent": "Mozilla/5.0 (job-agent)"})
+    r.raise_for_status()
+    base = re.match(r"https?://[^/]+", source["page"]).group(0)
+    jobs = []
+    for row in re.findall(r'<tr[^>]*class="jobDetailRow"[^>]*>(.*?)</tr>', r.text, re.S):
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+        href = re.search(r"href='([^']+)'", row) or re.search(r'href="([^"]+)"', row)
+        if len(cells) < 4 or not href:
+            continue
+        text = [html.unescape(re.sub(r"<[^>]+>", "", c)).strip() for c in cells]
+        try:
+            opened = dt.datetime.strptime(text[2], "%m/%d/%Y").replace(tzinfo=IL)
+        except ValueError:
+            continue  # no readable date -> never included
+        jobs.append(
+            {
+                "company": source["company"],
+                "title": text[1],
+                "location": text[3],
+                "all_locations": [],
+                "commitment": text[0],
+                "workplace": "",
+                "created": opened.astimezone(dt.timezone.utc),
+                "link": base + html.unescape(href.group(1)),
+                "description": "",
+            }
+        )
+    return jobs
+
+
+def fetch_phenom(source):
+    body = {
+        "lang": "en_gb", "deviceType": "desktop", "country": "gb",
+        "pageName": "search-results", "ddoKey": "refineSearch", "sortBy": "Most recent",
+        "subsearch": "", "from": 0, "irs": False, "jobs": True, "counts": False,
+        "all_fields": ["city"], "size": 100, "clearAll": False, "jdsource": "facets",
+        "isSliderEnable": False, "siteType": "external", "keywords": "", "global": True,
+        "selected_fields": {"city": ["Jerusalem"]}, "locationData": {},
+        "refNum": source["ref_num"],
+    }
+    r = requests.post(source["base"] + "/widgets", json=body, timeout=30,
+                      headers={"User-Agent": "Mozilla/5.0 (job-agent)"})
+    r.raise_for_status()
+    data = (r.json().get("refineSearch") or {}).get("data") or {}
+    jobs = []
+    for p in data.get("jobs", []):
+        posted = p.get("postedDate")
+        if not posted:
+            continue  # no publish date -> never included
+        jobs.append(
+            {
+                "company": source["company"],
+                "title": (p.get("title") or "").strip(),
+                "location": (p.get("cityStateCountry") or p.get("location") or "").strip(),
+                "all_locations": [p.get("city") or ""],
+                "commitment": p.get("type"),
+                "workplace": (p.get("remote") or "") if isinstance(p.get("remote"), str) else "",
+                "created": dt.datetime.strptime(posted[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc),
+                "link": f"{source['base']}/job/{p.get('jobId') or p.get('reqId')}/",
+                "description": p.get("descriptionTeaser") or "",
+            }
+        )
+    return jobs
+
+
+FETCHERS = {
+    "lever": fetch_lever,
+    "greenhouse": fetch_greenhouse,
+    "comeet": fetch_comeet,
+    "zoho": fetch_zoho,
+    "phenom": fetch_phenom,
+}
 
 # Experience levels (as the source names them) that are above the target.
 EXCLUDE_LEVELS = {"senior", "management", "executive", "director"}
@@ -373,6 +461,8 @@ def main():
             failed.append(src["company"])
             continue
         checked.append(src["company"])
+        print(f"SOURCE {src['company']}: {len(jobs)} jobs, "
+              f"{sum(1 for j in jobs if in_jerusalem(j))} in Jerusalem")
 
         if src["type"] == "comeet":
             first_run = src["company"] not in state["baselined"]
