@@ -8,9 +8,6 @@ import requests
 
 # (company, host, tenant, site)
 WORKDAY = [
-    ("MKS Instruments", "mksinst.wd1.myworkdayjobs.com", "mksinst", "MKSCareersEMEA"),
-    ("Intel", "intel.wd1.myworkdayjobs.com", "intel", "External"),
-    ("Medtronic", "medtronic.wd1.myworkdayjobs.com", "medtronic", "MedtronicCareers"),
     ("Merck (MSD)", "msd.wd5.myworkdayjobs.com", "msd", "SearchJobs"),
     ("Synamedia", "synamedia.wd3.myworkdayjobs.com", "synamedia", "Synamedia_Careers"),
     ("Cisco", "cisco.wd5.myworkdayjobs.com", "cisco", "Cisco_Careers"),
@@ -19,7 +16,9 @@ WORKDAY = [
 H = {"User-Agent": "Mozilla/5.0 (job-agent-probe)", "Accept": "application/json",
      "Content-Type": "application/json"}
 
+import time
 for company, host, tenant, site in WORKDAY:
+    time.sleep(15)
     url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
     try:
         r = requests.post(url, json={"appliedFacets": {}, "limit": 20, "offset": 0,

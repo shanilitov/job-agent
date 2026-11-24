@@ -106,6 +106,27 @@ SOURCES = [
         "careers_page": "https://agatsoftware.com/careers/",
     },
     {
+        "company": "Intel",
+        "type": "workday",
+        "host": "intel.wd1.myworkdayjobs.com", "tenant": "intel", "site": "External",
+        "careers_page": "https://intel.wd1.myworkdayjobs.com/External",
+    },
+    {
+        "company": "MKS Instruments",
+        "type": "workday",
+        "host": "mksinst.wd1.myworkdayjobs.com", "tenant": "mksinst", "site": "MKSCareersEMEA",
+        "careers_page": "https://mksinst.wd1.myworkdayjobs.com/MKSCareersEMEA",
+    },
+    {
+        # elbitsystemscareer.com loads all jobs from its own /cron/jobs.json.
+        # City id 493 is shown on Elbit's job pages as "ירושלים והסביבה".
+        "company": "Elbit Systems",
+        "type": "elbit",
+        "url": "https://elbitsystemscareer.com/cron/jobs.json",
+        "city_id": "493",
+        "careers_page": "https://elbitsystemscareer.com",
+    },
+    {
         # Zoho Recruit career site; the job table includes "Date Opened".
         "company": "Squaretalk",
         "type": "zoho",
@@ -129,18 +150,20 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen.json
 # The title must name a software-development role in the target stack...
 INCLUDE_TITLE = re.compile(
     r"(full[\s-]?stack|front[\s-]?end|back[\s-]?end|software|developer|web|"
-    r"\.net|c#|angular|react|node|python|java\b|typescript)",
+    r"\.net|c#|angular|react|node|python|java\b|typescript|"
+    r"מפתח|תוכנה|פיתוח|פול\s?סטאק|פולסטאק)",
     re.IGNORECASE,
 )
 # ...and must not name a level or a domain outside the target.
 EXCLUDE_TITLE = re.compile(
     r"\b(lead\w*|principal|staff|head|director|vp|manager|architect|"
     r"intern|student|junior|jr\.?|"
-    r"embedded|firmware|hardware|asic|verification|validation|algorithm\w*|c\+\+)",
+    r"embedded|firmware|hardware|asic|verification|validation|algorithm\w*|c\+\+|"
+    r"מנהל\S*|ראש\s+צוות|סטודנט\S*|אלגוריתמ\S*|חומרה|משובצ\S*|הנדסאי\S*)",
     re.IGNORECASE,
 )
 # Senior roles are not dropped: they go to their own section of the message.
-SENIOR_TITLE = re.compile(r"\b(senior|sr\.?)(?=\W|$)", re.IGNORECASE)
+SENIOR_TITLE = re.compile(r"\b(senior|sr\.?|בכיר\S*|מנוסה|מנוס\S*)(?=\W|$)", re.IGNORECASE)
 YEARS_RE = re.compile(r"(\d+)\s*\+?\s*(?:-\s*\d+\s*)?years?", re.IGNORECASE)
 
 # Staffing agencies are not in SOURCES at all, so they can never appear.
@@ -336,7 +359,101 @@ def fetch_html(source):
     return jobs
 
 
+def _workday_age_days(posted_on):
+    """Workday's own list text, e.g. 'Posted Today' / 'Posted 3 Days Ago' / 'Posted 30+ Days Ago'."""
+    t = (posted_on or "").lower()
+    if "today" in t:
+        return 0
+    if "yesterday" in t:
+        return 1
+    m = re.search(r"(\d+)\+?\s*days", t)
+    if m:
+        return 999 if "+" in t else int(m.group(1))
+    return None
+
+
+def fetch_workday(source):
+    """Workday career site. The list call is the one the site itself makes; the
+    publish date, locations and job type come from each job's own detail record."""
+    host, tenant, site = source["host"], source["tenant"], source["site"]
+    base = f"https://{host}/wday/cxs/{tenant}/{site}"
+    h = {"User-Agent": "Mozilla/5.0 (job-agent)", "Accept": "application/json",
+         "Content-Type": "application/json"}
+    posts, offset = [], 0
+    while True:
+        r = requests.post(f"{base}/jobs", json={"appliedFacets": {}, "limit": 20, "offset": offset,
+                                               "searchText": "Jerusalem"}, headers=h, timeout=30)
+        r.raise_for_status()
+        d = r.json()
+        page = d.get("jobPostings", [])
+        posts += page
+        offset += 20
+        if not page or offset >= (d.get("total") or 0) or offset >= 200:
+            break
+    jobs = []
+    for p in posts:
+        age = _workday_age_days(p.get("postedOn"))
+        if age is None or age > MAX_AGE_HOURS / 24 + 1:
+            continue  # not recent by Workday's own list -> skip the detail call
+        if not INCLUDE_TITLE.search(p.get("title") or ""):
+            continue
+        r = requests.get(base + p["externalPath"], headers=h, timeout=30)
+        if r.status_code != 200:
+            continue
+        info = r.json().get("jobPostingInfo") or {}
+        start = info.get("startDate")
+        if not start:
+            continue  # no publish date -> never included
+        text = html.unescape(re.sub(r"<[^>]+>", " ", info.get("jobDescription") or ""))
+        jobs.append(
+            {
+                "company": source["company"],
+                "title": (info.get("title") or p.get("title") or "").strip(),
+                "location": info.get("location") or "",
+                "all_locations": list(info.get("additionalLocations") or []),
+                "commitment": info.get("timeType"),
+                "workplace": "",
+                "created": dt.datetime.strptime(start[:10], "%Y-%m-%d").replace(tzinfo=IL)
+                .astimezone(dt.timezone.utc),
+                "link": info.get("externalUrl") or f"https://{host}/{site}{p['externalPath']}",
+                "description": " ".join(text.split()),
+            }
+        )
+    return jobs
+
+
+def fetch_elbit(source):
+    r = requests.get(source["url"], timeout=60, headers={"User-Agent": "Mozilla/5.0 (job-agent)"})
+    r.raise_for_status()
+    jobs = []
+    for p in r.json():
+        props = {x.get("PropertyName"): x.get("Value") for x in p.get("extendedProperties") or []}
+        if props.get("Cities") != source["city_id"] or p.get("status") != 1:
+            continue
+        opened = p.get("openDate")
+        if not opened:
+            continue  # no publish date -> never included
+        text = html.unescape(html.unescape(re.sub(r"&lt;[^&]*&gt;|<[^>]+>", " ", p.get("description") or "")))
+        jobs.append(
+            {
+                "company": source["company"],
+                "title": (p.get("jobTitle") or "").strip(),
+                "location": "ירושלים והסביבה",
+                "all_locations": [],
+                "commitment": p.get("employmentType"),
+                "workplace": "",
+                "created": dt.datetime.strptime(opened[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=IL)
+                .astimezone(dt.timezone.utc),
+                "link": f"https://elbitsystemscareer.com/job/?jid={p.get('jobId')}",
+                "description": " ".join(re.sub(r"<[^>]+>", " ", text).split()),
+            }
+        )
+    return jobs
+
+
 FETCHERS = {
+    "elbit": fetch_elbit,
+    "workday": fetch_workday,
     "html": fetch_html,
     "lever": fetch_lever,
     "greenhouse": fetch_greenhouse,
@@ -358,7 +475,7 @@ def is_recent(job, now):
 
 def in_jerusalem(job):
     places = [job["location"]] + job["all_locations"]
-    return any("jerusalem" in p.lower() for p in places)
+    return any("jerusalem" in p.lower() or "ירושלים" in p for p in places)
 
 
 def is_full_time(job):
