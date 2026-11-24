@@ -18,6 +18,7 @@ Usage:
 Environment variables (use GitHub Secrets, never put them in code):
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 """
+import html
 import os
 import re
 import sys
@@ -40,6 +41,14 @@ SOURCES = [
         "type": "lever",
         "api": "https://api.eu.lever.co/v0/postings/mobileye?mode=json",
         "careers_page": "https://careers.mobileye.com",
+    },
+    {
+        # Verified by probe.py: Greenhouse board "triplewhale" has Jerusalem jobs
+        # and every one carries first_published.
+        "company": "Triple Whale",
+        "type": "greenhouse",
+        "api": "https://boards-api.greenhouse.io/v1/boards/triplewhale/jobs?content=true",
+        "careers_page": "https://job-boards.greenhouse.io/triplewhale",
     },
 ]
 
@@ -84,7 +93,34 @@ def fetch_lever(source):
     return jobs
 
 
-FETCHERS = {"lever": fetch_lever}
+def fetch_greenhouse(source):
+    r = requests.get(source["api"], timeout=30)
+    r.raise_for_status()
+    jobs = []
+    for p in r.json().get("jobs", []):
+        published = p.get("first_published")
+        if not published:
+            continue  # no publish date -> never included
+        text = html.unescape(p.get("content") or "")
+        text = html.unescape(re.sub(r"<[^>]+>", " ", text))
+        jobs.append(
+            {
+                "company": source["company"],
+                "title": (p.get("title") or "").strip(),
+                "location": ((p.get("location") or {}).get("name") or "").strip(),
+                "all_locations": [o.get("name") or "" for o in (p.get("offices") or [])],
+                # Greenhouse's public API has no employment-type field.
+                "commitment": None,
+                "workplace": "",
+                "created": dt.datetime.fromisoformat(published).astimezone(dt.timezone.utc),
+                "link": p.get("absolute_url", ""),
+                "description": " ".join(text.split()),
+            }
+        )
+    return jobs
+
+
+FETCHERS = {"lever": fetch_lever, "greenhouse": fetch_greenhouse}
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +136,10 @@ def in_jerusalem(job):
 
 
 def is_full_time(job):
+    # None = the source has no employment-type field; the job is kept and the
+    # message says the type was not stated, rather than guessing it.
+    if job["commitment"] is None:
+        return True
     return "full" in job["commitment"].lower()
 
 
@@ -152,7 +192,7 @@ def build_message(jobs, checked, failed, now):
             lines.append(f"{j['title']}")
             lines.append(f"חברה: {j['company']}")
             lines.append(f"מיקום: {j['location']}")
-            lines.append(f"סוג משרה: {j['commitment']}")
+            lines.append(f"סוג משרה: {j['commitment'] or 'לא צוין במקור'}")
             lines.append(f"דרך עבודה לפי המקור: {j['workplace'] or 'לא צוין'}")
             lines.append(f"פורסם: {created}")
             note = years_note(j)
