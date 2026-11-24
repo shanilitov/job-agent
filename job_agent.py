@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 import datetime as dt
 from zoneinfo import ZoneInfo
 
@@ -372,6 +373,17 @@ def _workday_age_days(posted_on):
     return None
 
 
+def _workday_call(method, url, h, **kw):
+    """Workday rate-limits busy addresses (HTTP 429); wait and retry a few times."""
+    for wait in (0, 20, 45, 90):
+        if wait:
+            time.sleep(wait)
+        r = requests.request(method, url, headers=h, timeout=30, **kw)
+        if r.status_code != 429:
+            return r
+    return r
+
+
 def fetch_workday(source):
     """Workday career site. The list call is the one the site itself makes; the
     publish date, locations and job type come from each job's own detail record."""
@@ -381,8 +393,8 @@ def fetch_workday(source):
          "Content-Type": "application/json"}
     posts, offset = [], 0
     while True:
-        r = requests.post(f"{base}/jobs", json={"appliedFacets": {}, "limit": 20, "offset": offset,
-                                               "searchText": "Jerusalem"}, headers=h, timeout=30)
+        r = _workday_call("POST", f"{base}/jobs", h, json={"appliedFacets": {}, "limit": 20,
+                                                          "offset": offset, "searchText": "Jerusalem"})
         r.raise_for_status()
         d = r.json()
         page = d.get("jobPostings", [])
@@ -397,7 +409,8 @@ def fetch_workday(source):
             continue  # not recent by Workday's own list -> skip the detail call
         if not INCLUDE_TITLE.search(p.get("title") or ""):
             continue
-        r = requests.get(base + p["externalPath"], headers=h, timeout=30)
+        time.sleep(1)
+        r = _workday_call("GET", base + p["externalPath"], h)
         if r.status_code != 200:
             continue
         info = r.json().get("jobPostingInfo") or {}
