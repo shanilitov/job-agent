@@ -1,0 +1,22 @@
+name: Test message (14 days)
+
+# Sends a real Telegram message, looking back 14 days instead of 72 hours,
+# so the message format can be reviewed. Does not change seen.json.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python job_agent.py --force --no-save
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          JOB_AGENT_MAX_AGE_HOURS: "336"
+          JOB_AGENT_TEST_LABEL: "🧪 הודעת בדיקה: משרות מ-14 הימים האחרונים (ההודעה היומית מציגה 72 שעות)"

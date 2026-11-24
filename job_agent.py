@@ -14,6 +14,7 @@ Usage:
   python job_agent.py --force    # run now, ignore the time gate
   python job_agent.py --test     # only send a test message to Telegram
   python job_agent.py --dry      # run everything but print instead of sending
+  python job_agent.py --no-save  # send, but do not update seen.json (test runs)
 
 Environment variables (use GitHub Secrets, never put them in code):
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
@@ -579,6 +580,8 @@ def job_lines(j, date_label, date_value):
 def build_message(dated, undated, checked, failed, baselined_now, now):
     date_str = now.astimezone(IL).strftime("%d.%m.%Y %H:%M")
     lines = [f"עדכון משרות, {date_str}", ""]
+    if os.environ.get("JOB_AGENT_TEST_LABEL"):
+        lines = [os.environ["JOB_AGENT_TEST_LABEL"], ""] + lines
     reg_dated = [j for j in dated if not j["senior"]]
     reg_undated = [j for j in undated if not j["senior"]]
     sen_dated = [j for j in dated if j["senior"]]
@@ -739,7 +742,7 @@ def main():
     dated = sorted(dedupe(dated), key=lambda j: j["created"], reverse=True)
     undated = sorted(dedupe(undated), key=lambda j: j["first_seen"], reverse=True)
     send_telegram(build_message(dated, undated, checked, failed, baselined_now, now), dry)
-    if not dry:
+    if not dry and "--no-save" not in args:
         save_state(state)
 
 
