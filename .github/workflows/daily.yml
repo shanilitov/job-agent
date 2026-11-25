@@ -2,10 +2,11 @@ name: Daily job update
 
 on:
   schedule:
-    # Two UTC times so that 19:xx Israel time is covered in both summer and winter.
-    # The script itself only proceeds when it is 19:xx in Israel.
-    - cron: "30 16 * * *"
-    - cron: "30 17 * * *"
+    # GitHub starts scheduled runs late at busy times (on 2026-11-24 by ~8 hours),
+    # so the workflow is triggered every 30 minutes from 16:00 to 21:30 UTC.
+    # The script sends on the first run from 19:00 Israel time and records the
+    # date in seen.json; every later run that day stops right away.
+    - cron: "0,30 16-21 * * *"
   workflow_dispatch: {}
 
 permissions:

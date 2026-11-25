@@ -733,11 +733,18 @@ def main():
 
     now = dt.datetime.now(dt.timezone.utc)
     manual = "--force" in args or os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-    if not manual and now.astimezone(IL).hour != 19:
-        print("Not 19:xx Israel time, skipping.")
-        return
-
     state = load_state()
+    today = now.astimezone(IL).date().isoformat()
+    if not manual:
+        # GitHub can start scheduled runs late, so the workflow is triggered several
+        # times in the evening. The first run from 19:00 Israel time sends the
+        # update; later runs that day see last_sent and stop.
+        if now.astimezone(IL).hour < 19:
+            print("Before 19:00 Israel time, skipping.")
+            return
+        if state.get("last_sent") == today:
+            print("Today's update was already sent, skipping.")
+            return
     dated, undated, checked, failed, baselined_now = [], [], [], [], []
     for src in SOURCES:
         try:
@@ -804,6 +811,8 @@ def main():
     undated = sorted(dedupe(undated), key=lambda j: j["first_seen"], reverse=True)
     send_telegram(build_message(dated, undated, checked, failed, baselined_now, now), dry)
     if not dry and "--no-save" not in args:
+        if not manual:
+            state["last_sent"] = today
         save_state(state)
 
 

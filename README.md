@@ -38,7 +38,7 @@ flowchart LR
     S -.->|committed back<br/>to the repo| A
 ```
 
-1. GitHub Actions starts the workflow every evening. The script runs only at 19:xx Israel time and handles daylight-saving time automatically.
+1. GitHub Actions triggers the workflow several times each evening. The first run from 19:00 Israel time sends the update, and daylight-saving time is handled automatically. See [Schedule](#3-schedule).
 2. Each source is read through the same channel its own careers page uses: a public job-board API, the site's search endpoint or the site's job list.
 3. Every job passes through the [filters](#filtering).
 4. A job that passes is loaded once more. It is included only if its page returns HTTP 200.
@@ -157,9 +157,15 @@ In **Settings → Secrets and variables → Actions**, add:
 
 ### 3. Schedule
 
-`.github/workflows/daily.yml` is triggered at 16:30 and 17:30 UTC, which covers 19:30 Israel time in both winter and summer. The script continues only when it is 19:xx in Israel, so it sends one message a day. GitHub may start scheduled runs a few minutes late.
+GitHub starts scheduled runs late when it is busy. On 2026-11-24 the runs were about 8 hours late. To cope with this, `.github/workflows/daily.yml` triggers the workflow every 30 minutes from 16:00 to 21:30 UTC.
 
-To run the agent on demand, go to **Actions → Daily job update → Run workflow**. A manual run skips the time check and sends a real message.
+- **Before 19:00 Israel time**, a run stops right away.
+- **The first run from 19:00 Israel time** sends the update and records the date in `seen.json` (`last_sent`).
+- **Every later run that day** sees `last_sent` and stops.
+
+So at most one message arrives per evening, usually shortly after 19:00. If GitHub delays every run past 23:30 Israel time, no update is sent that day.
+
+To run the agent on demand, go to **Actions → Daily job update → Run workflow**. A manual run skips the time check, sends a real message, and does not count as the day's scheduled update.
 
 ## Running locally
 
