@@ -811,7 +811,9 @@ def main():
     undated = sorted(dedupe(undated), key=lambda j: j["first_seen"], reverse=True)
     send_telegram(build_message(dated, undated, checked, failed, baselined_now, now), dry)
     if not dry and "--no-save" not in args:
-        if not manual:
+        # A manual run in the evening also counts as today's update, so a late
+        # scheduled run that evening will not send a second message.
+        if not manual or now.astimezone(IL).hour >= 19:
             state["last_sent"] = today
         save_state(state)
 
