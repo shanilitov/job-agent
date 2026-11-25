@@ -595,17 +595,43 @@ def years_ok_after_details(job):
 # ---------------------------------------------------------------------------
 # First-seen state (for sources without a publish date)
 # ---------------------------------------------------------------------------
+# When JOB_AGENT_STATE_CONN is set (Azure), the state lives in Azure Blob Storage;
+# otherwise in seen.json next to this file (GitHub Actions / local runs).
+STATE_CONTAINER = os.environ.get("JOB_AGENT_STATE_CONTAINER", "job-agent")
+STATE_BLOB = "seen.json"
+
+
+def _state_blob():
+    from azure.storage.blob import BlobServiceClient  # only needed on Azure
+    service = BlobServiceClient.from_connection_string(os.environ["JOB_AGENT_STATE_CONN"])
+    container = service.get_container_client(STATE_CONTAINER)
+    if not container.exists():
+        container.create_container()
+    return container.get_blob_client(STATE_BLOB)
+
+
 def load_state():
+    empty = {"baselined": [], "first_seen": {}}
+    if os.environ.get("JOB_AGENT_STATE_CONN"):
+        blob = _state_blob()
+        if blob.exists():
+            return json.loads(blob.download_blob().readall())
+        # First run on Azure: start from the seen.json shipped with the code,
+        # so companies already being tracked are not re-baselined.
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"baselined": [], "first_seen": {}}
+        return empty
 
 
 def save_state(state):
+    data = json.dumps(state, ensure_ascii=False, indent=1, sort_keys=True)
+    if os.environ.get("JOB_AGENT_STATE_CONN"):
+        _state_blob().upload_blob(data.encode("utf-8"), overwrite=True)
+        return
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=1, sort_keys=True)
+        f.write(data)
 
 
 # ---------------------------------------------------------------------------
@@ -712,8 +738,7 @@ def send_telegram(text, dry=False):
             timeout=30,
         )
         if not r.ok:
-            print(f"Telegram error: {r.status_code} {r.text}", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError(f"Telegram error: {r.status_code} {r.text}")
 
 
 # ---------------------------------------------------------------------------
@@ -723,28 +748,17 @@ def passes_filters(j):
     return in_jerusalem(j) and is_full_time(j) and level_ok(j) and not_staffing(j)
 
 
-def main():
-    args = set(sys.argv[1:])
-    dry = "--dry" in args
-
-    if "--test" in args:
-        send_telegram("הודעת בדיקה מסוכן המשרות. החיבור לטלגרם עובד.", dry)
-        return
-
-    now = dt.datetime.now(dt.timezone.utc)
-    manual = "--force" in args or os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+def run(manual=False, dry=False, save=True, now=None):
+    """One check. Returns a short status line. Raises if the message could not be sent."""
+    now = now or dt.datetime.now(dt.timezone.utc)
     state = load_state()
     today = now.astimezone(IL).date().isoformat()
     if not manual:
-        # GitHub can start scheduled runs late, so the workflow is triggered several
-        # times in the evening. The first run from 19:00 Israel time sends the
-        # update; later runs that day see last_sent and stop.
+        # A scheduled run sends only from 19:00 Israel time, once per day.
         if now.astimezone(IL).hour < 19:
-            print("Before 19:00 Israel time, skipping.")
-            return
+            return "skipped: before 19:00 Israel time"
         if state.get("last_sent") == today:
-            print("Today's update was already sent, skipping.")
-            return
+            return "skipped: today's update was already sent"
     dated, undated, checked, failed, baselined_now = [], [], [], [], []
     for src in SOURCES:
         try:
@@ -810,12 +824,24 @@ def main():
     dated = sorted(dedupe(dated), key=lambda j: j["created"], reverse=True)
     undated = sorted(dedupe(undated), key=lambda j: j["first_seen"], reverse=True)
     send_telegram(build_message(dated, undated, checked, failed, baselined_now, now), dry)
-    if not dry and "--no-save" not in args:
+    if not dry and save:
         # A manual run in the evening also counts as today's update, so a late
         # scheduled run that evening will not send a second message.
         if not manual or now.astimezone(IL).hour >= 19:
             state["last_sent"] = today
         save_state(state)
+    return (f"sent: {len(dated)} dated, {len(undated)} first-seen, "
+            f"{len(checked)} companies checked, {len(failed)} problems")
+
+
+def main():
+    args = set(sys.argv[1:])
+    dry = "--dry" in args
+    if "--test" in args:
+        send_telegram("הודעת בדיקה מסוכן המשרות. החיבור לטלגרם עובד.", dry)
+        return
+    manual = "--force" in args or os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    print(run(manual=manual, dry=dry, save="--no-save" not in args))
 
 
 if __name__ == "__main__":

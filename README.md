@@ -167,6 +167,28 @@ So at most one message arrives per evening, usually shortly after 19:00. If GitH
 
 To run the agent on demand, go to **Actions → Daily job update → Run workflow**. A manual run skips the time check, sends a real message, and does not count as the day's scheduled update.
 
+## Production: Azure Functions
+
+Scheduled runs on GitHub Actions are best-effort. In practice they started hours late or not at all, so production runs on **Azure Functions** (Flex Consumption) with a timer trigger. GitHub Actions is kept for manual and test runs.
+
+| Piece | What it does |
+|---|---|
+| `azure_function/function_app.py` | `daily_update` timer at 16:30 and 17:30 UTC, one of which is 19:30 in Israel. `run_now` is an HTTP endpoint for manual runs (function key required). |
+| State | `seen.json` is kept in Azure Blob Storage (`JOB_AGENT_STATE_CONN`). The first Azure run starts from the copy that ships with the code. |
+| Monitoring | Each sent update pings [Healthchecks.io](https://healthchecks.io) (`HEALTHCHECK_URL`). If a day passes with no ping, Healthchecks.io sends an email alert. A crash pings `/fail` right away. |
+| Cost | Fits within the Flex Consumption monthly free grant. A $1 budget alert in Azure Cost Management catches surprises. |
+
+**Deploying.** Open Azure Cloud Shell (Bash), then run:
+
+```bash
+git clone https://github.com/shanilitov/job-agent && cd job-agent
+bash azure_function/deploy.sh
+```
+
+The script creates the resource group, storage account and function app. It asks for the secrets with hidden input, deploys the code, and runs one manual check. You can run it again at any time to redeploy after a code change.
+
+**Healthchecks.io check.** Use a cron schedule of `30 19 * * *`, time zone `Asia/Jerusalem`, and a grace time of 1 hour.
+
 ## Running locally
 
 ```bash
@@ -211,6 +233,7 @@ Supported types: `greenhouse`, `lever`, `workday`, `phenom`, `zoho`, `elbit`, `c
 ```
 .
 ├── job_agent.py              # sources, fetchers, filters, message, Telegram
+├── azure_function/           # production: timer + manual HTTP trigger, deploy.sh
 ├── probe.py                  # scratch script for checking new sources from GitHub
 ├── seen.json                 # first-seen state (written by the workflow)
 ├── requirements.txt
